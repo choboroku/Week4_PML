@@ -1,0 +1,217 @@
+
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+Project Assignment
+==================
+
+### **Author**: A. Lam
+
+Summary
+-------
+
+In this study, a dataset that consists of five different personal activities collected from accelerometers wore in different 
+places in the body. The participants performed barbell lifts in 5 different ways. The goal of this project is to predict the 
+manner in which they did the exercise using techniques learned in the course.  The best method is then used to predict the 
+activity in the test dataset.
+
+Analysis
+--------
+
+Loading all the necessary libraries and dataset, and set the seed to make 
+the analysis reproducible.
+
+```{r initial, message=FALSE}
+library(caret)
+library(doParallel)
+library(ggpubr)
+
+set.seed(123456)
+train.data <- read.csv('pml-training.csv');
+test.data <- read.csv('pml-testing.csv');
+```
+
+The data contains some columns that are not necessary for the analysis. 
+Making some cleaning:
+
+```{r clean}
+has.na <- which(as.vector(sapply(train.data, function(x) sum(is.na(x))))!=0)
+train.data <- train.data[,-has.na][, -c(1:7)]
+test.data <- test.data[,-has.na][, -c(1:7)] 
+```
+
+The training dataset is split into a train and test subsets:
+
+```{r splitData}  
+subset.train <- createDataPartition(train.data$classe, p=0.8, list=FALSE)
+train.portion <- train.data[subset.train, ]
+test.portion <- train.data[-subset.train, ]
+```
+
+The goal here is to find the best model that predicts the test set of 20 points. 
+The caret package has several methods, and they will be used to find out which one 
+predict the best result. The methods used are k-Nearest Neighbors (knn), 
+Gradient Boosting Machine (gbm), Random Forest (rf), and Linear Discrimination Analysis
+(lda). Setting the parameters for caret package:
+
+```{r setCaret}
+control <- trainControl(
+  method = "cv",
+  number = 10,
+  p = 0.80,
+  allowParallel = TRUE
+)
+metric <- "Accuracy"
+methods.type <- c('knn', 'gbm', 'rf', 'lda')
+```
+
+Initializing some useful for the analysis:
+
+```{r objects}
+output.from.method <- vector(mode = "list", length = length(methods.type))
+statistics.from.method <- vector(mode = "list",length = length(methods.type))
+
+initial.variable <- rep(NA,5)
+initial.df <- data.frame(
+   value  = initial.variable,
+   class  = initial.variable,
+   method = initial.variable
+)
+
+sensitivity.df <- initial.df
+specificity.df <- initial.df
+precision.df   <- initial.df
+prevalence.df  <- initial.df
+
+```
+
+Defining a function to save the outputs from each method:
+
+```{r function}
+compute.stat.df <- function(x,y){
+   df <- data.frame(
+     value = x,
+     class = c('A', 'B', 'C', 'D', 'E'),
+     method = rep(y, 5)
+   )
+   rownames(df) <- NULL
+   return(df)
+}
+``` 
+
+The core of the program is performed in the section below.
+NOTE: This part takes some time. FYI, the R image is saved in the GitHub
+repo.
+
+```{r run, eval=FALSE}
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+count <- 1
+for (i in c(1:length(methods.type))){
+   print(paste('Processing data using ', methods.type[i], sep=""))
+   output.from.method[[i]] <- train(
+     classe~.,
+     data = train.portion,
+     method = methods.type[i],
+     metric = metric,
+     preProcess = c("center", "scale"),
+     trControl = control
+   )
+   
+   statistics.from.method[[i]] <- confusionMatrix(
+     predict(output.from.method[[i]], newdata=test.portion),
+     test.portion$classe
+   )
+
+   temp.sensitivity <- compute.stat.df(
+     (statistics.from.method[[i]])$byClass[,c(1)],
+     methods.type[i]
+   )
+
+   temp.specificity <- compute.stat.df(
+     (statistics.from.method[[i]])$byClass[,c(2)],
+     methods.type[i]
+   )
+
+   temp.precision <- compute.stat.df(
+     (statistics.from.method[[i]])$byClass[,c(3)],
+     methods.type[i]
+   )
+
+   temp.prevalence <- compute.stat.df(
+     (statistics.from.method[[i]])$byClass[,c(4)],
+     methods.type[i]
+   )
+   
+   if(count==1){
+     sensitivity.df <- temp.sensitivity
+     specificity.df <- temp.specificity
+     precision.df   <- temp.precision
+     prevalence.df  <- temp.prevalence
+   } else {
+     sensitivity.df <- rbind(sensitivity.df, temp.sensitivity)
+     specificity.df <- rbind(specificity.df, temp.specificity)
+     precision.df   <- rbind(precision.df, temp.precision)
+     prevalence.df  <- rbind(prevalence.df,temp.prevalence)
+   }
+   count <- count + 1
+}
+on.exit(stopCluster(cl))
+
+accuracy = sensitivity.df$value*prevalence.df$value +
+   specificity.df$value*(1-prevalence.df$value) 
+
+accuracy.df <- data.frame(
+   value = accuracy,
+   class = rep(c('A', 'B', 'C', 'D', 'E'), length(methods.type)),
+   method = rep(methods.type, each=5)
+)
+
+```
+
+The R code above generates a set of dataframes with data related to the 
+sensitivity, specificity, precision and accuracy for each method used in the analysis. 
+
+NOTE: Running the code above is time consuming depending on the machine
+specification. FYI, the Github repo contains the R image where the user
+can load and test the commands below quickly.
+
+```{r plot, fig.height = 10, fig.width = 10}
+load("pml_project.RData")
+plotA <- ggplot(sensitivity.df, aes(x=class, y=value, fill=method)) +
+    ggtitle("Sensitivity") + 
+    geom_bar(stat="identity", position=position_dodge()) +
+    scale_fill_brewer(palette="Paired") + theme_minimal()
+
+plotB <- ggplot(specificity.df, aes(x=class, y=value, fill=method)) +
+    ggtitle("Specificity") +
+    geom_bar(stat="identity", position=position_dodge()) +
+    scale_fill_brewer(palette="Paired") + theme_minimal()
+
+plotC <- ggplot(precision.df, aes(x=class, y=value, fill=method)) +
+    ggtitle("Precision") +
+    geom_bar(stat="identity", position=position_dodge()) +
+    scale_fill_brewer(palette="Paired") + theme_minimal()
+
+plotD <- ggplot(accuracy.df, aes(x=class, y=value, fill=method)) +
+    ggtitle("Accuracy") +
+    geom_bar(stat="identity", position=position_dodge()) +
+    scale_fill_brewer(palette="Paired") + theme_minimal()
+
+final.plot <- ggarrange(plotA, plotB, plotC, plotD, ncol = 2, nrow = 2)
+
+final.plot
+```
+
+From the plots above, Random Forest (rf) predicts consistently well 
+in all classes in comparison of the rest of the methods. Thus, we can use 
+the Random Forest model to predict the result for the
+test data.
+
+```{r test}
+data.frame(prediction=predict(output.from.method[[3]], newdata=test.data))
+``` 
+
+This result will be used in the quiz.
